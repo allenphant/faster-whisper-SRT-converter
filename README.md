@@ -8,6 +8,7 @@
 - 📊 即時進度條顯示
 - 🎬 支援影片檔案自動擷取音訊
 - 📁 輸出檔案自動帶上模型名稱，方便比較
+- 🗂️ 支援批次轉換，一次處理多個檔案（模型只載入一次）
 
 ---
 
@@ -70,12 +71,29 @@ python faster_whisper_srt.py your_audio.mp3
 # 指定模型
 python faster_whisper_srt.py your_audio.mp3 --model large-v3-turbo
 
-# 指定每行最大字數
+# 指定每行最大字數（預設 40，最少 4）
 python faster_whisper_srt.py your_audio.mp3 --max-chars 25
 
 # 影片檔案（需要 FFmpeg）
 python faster_whisper_srt.py your_video.mp4
 ```
+
+### 批次轉換（多個檔案）
+
+模型只會載入一次，節省時間和記憶體：
+
+```bash
+# 指定多個檔案
+python faster_whisper_srt.py a.mp3 b.mp3 c.mp4
+
+# 使用萬用字元（PowerShell / bash 皆支援）
+python faster_whisper_srt.py *.mp3 --model large-v3-turbo
+
+# 混合音訊和影片
+python faster_whisper_srt.py interview.mp3 presentation.mp4 --model medium
+```
+
+執行完成後會顯示摘要：`[+] Done! 3/3 files converted successfully.`
 
 ### 輸出
 
@@ -128,4 +146,4 @@ python faster_whisper_srt.py Colony_Counter_demo.mp3 --model tiny
 
 ## License
 
-MIT
+[MIT](LICENSE)
