@@ -1,0 +1,52 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # 只有在推播標籤 (例如 v1.0.0) 時才會觸發打包
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # 使用穩定的 Python 3.11
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build Executable
+        run: |
+          python build.py
+
+      - name: Zip build (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/FasterWhisperSRT/* -DestinationPath FasterWhisperSRT-Windows.zip
+
+      - name: Zip build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd dist/FasterWhisperSRT
+          zip -r ../../FasterWhisperSRT-macOS.zip .
+          cd ../..
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            FasterWhisperSRT-*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

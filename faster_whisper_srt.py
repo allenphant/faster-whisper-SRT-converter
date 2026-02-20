@@ -183,11 +183,20 @@ def split_text_by_chars(text: str, max_chars: int, min_chars: int = 4) -> list:
 # ---------------------------------------------------------------------------
 
 
-def load_model_with_progress(model_name: str):
-    """Load a faster-whisper model with a visual progress indicator."""
+def load_model_with_progress(model_name: str, on_progress_callback=None):
+    """
+    Load a faster-whisper model with a visual progress indicator.
+    
+    on_progress_callback: function(str) -> None. If provided, status messages
+                          are sent here instead of stdout.
+    """
     from faster_whisper import WhisperModel
 
-    print(f"[*] Analyzing model: {model_name}")
+    msg_init = f"[*] Analyzing model: {model_name}"
+    if on_progress_callback:
+        on_progress_callback(msg_init)
+    else:
+        print(msg_init)
 
     stop_flag = False
     LINE_WIDTH = 80
@@ -198,7 +207,8 @@ def load_model_with_progress(model_name: str):
         cache_dir = Path(os.environ.get("USERPROFILE", os.environ.get("HOME", ""))) / ".cache" / "huggingface" / "hub"
         expected_mb = MODEL_SIZES_MB.get(model_name, 0)
         start_size = 0
-
+        
+        # Initial size check
         try:
             if cache_dir.exists():
                 start_size = sum(f.stat().st_size for f in cache_dir.glob("**/*") if f.is_file())
@@ -214,35 +224,78 @@ def load_model_with_progress(model_name: str):
                 pass
 
             delta_mb = (current_size - start_size) / (1024 * 1024)
+            msg = ""
 
             if delta_mb > 1:
                 if expected_mb > 0:
                     pct = min(delta_mb / expected_mb * 100, 99)
-                    msg = f"[*] Downloading model... {spinner[i % 4]}  {delta_mb:.0f} / ~{expected_mb} MB ({pct:.0f}%)"
+                    msg = f"[*] Downloading... {spinner[i % 4]} {delta_mb:.0f} / ~{expected_mb} MB ({pct:.0f}%)"
                 else:
-                    msg = f"[*] Downloading model... {spinner[i % 4]}  {delta_mb:.0f} MB"
+                    msg = f"[*] Downloading... {spinner[i % 4]} {delta_mb:.0f} MB"
             else:
                 msg = f"[*] Loading model... {spinner[i % 4]}"
 
-            sys.stdout.write(f"\r{msg:<{LINE_WIDTH}}")
-            sys.stdout.flush()
+            if on_progress_callback:
+                on_progress_callback(msg)
+            else:
+                sys.stdout.write(f"\r{msg:<{LINE_WIDTH}}")
+                sys.stdout.flush()
+            
             time.sleep(0.5)
             i += 1
 
-        sys.stdout.write(f"\r{'':<{LINE_WIDTH}}\r")
-        sys.stdout.flush()
+        if not on_progress_callback:
+            sys.stdout.write(f"\r{'':<{LINE_WIDTH}}\r")
+            sys.stdout.flush()
 
     t = threading.Thread(target=loading_indicator, daemon=True)
     t.start()
 
     try:
         model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    except Exception as e:
+        stop_flag = True
+        raise e
     finally:
         stop_flag = True
         t.join(timeout=1.0)
 
-    print("[+] Model loaded successfully.")
+    success_msg = "[+] Model loaded successfully."
+    if on_progress_callback:
+         on_progress_callback(success_msg)
+    else:
+        print(success_msg)
+        
     return model
+
+
+def get_model_path_info(model_name: str):
+    """
+    Check if model exists in cache and return path info.
+    Returns: (is_cached: bool, path_or_msg: str)
+    """
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        
+        # faster-whisper uses specific repo names
+        repo_id = f"Systran/faster-whisper-{model_name}"
+        filename = "model.bin" # Check for main model file
+        
+        # This returns filepath if cached, else None
+        cached_path = try_to_load_from_cache(repo_id=repo_id, filename=filename)
+        
+        if cached_path:
+            # Return the folder containing the model
+            return True, str(Path(cached_path).parent)
+        else:
+             # Default cache location prediction
+            cache_dir = Path(os.environ.get("USERPROFILE", os.environ.get("HOME", ""))) / ".cache" / "huggingface" / "hub"
+            return False, f"{cache_dir} (Will download)"
+            
+    except ImportError:
+        return False, "huggingface_hub not available"
+    except Exception as e:
+        return False, str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -255,8 +308,12 @@ def transcribe_and_build_srt(
     model,
     model_name: str,
     max_chars: int = 40,
+    progress_callback=None,
 ) -> str:
-    """Transcribe audio using a pre-loaded faster-whisper model and return SRT content."""
+    """Transcribe audio using a pre-loaded faster-whisper model and return SRT content.
+
+    progress_callback: function(current_seconds, total_seconds)
+    """
     from tqdm import tqdm
 
     # --- Get duration for progress bar ---
@@ -264,6 +321,9 @@ def transcribe_and_build_srt(
     if total_duration <= 0:
         print("[!] Could not determine audio duration. Progress bar will be approximate.")
         total_duration = 1.0
+
+    if progress_callback:
+        progress_callback(0, total_duration)
 
     # --- Transcribe with progress ---
     print(f"[*] Transcribing: {Path(audio_path).name}")
@@ -277,13 +337,15 @@ def transcribe_and_build_srt(
     srt_lines = []
     subtitle_index = 1
 
-    progress_bar = tqdm(
-        total=int(total_duration),
-        unit="s",
-        desc="Transcribing",
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s [{elapsed}<{remaining}, {rate_fmt}]",
-        ncols=80,
-    )
+    progress_bar = None
+    if not progress_callback:
+        progress_bar = tqdm(
+            total=int(total_duration),
+            unit="s",
+            desc="Transcribing",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}s [{elapsed}<{remaining}, {rate_fmt}]",
+            ncols=80,
+        )
 
     last_pos = 0.0
 
@@ -294,7 +356,10 @@ def transcribe_and_build_srt(
 
         progress = int(segment.end) - int(last_pos)
         if progress > 0:
-            progress_bar.update(progress)
+            if progress_bar:
+                progress_bar.update(progress)
+            if progress_callback:
+                progress_callback(segment.end, total_duration)
             last_pos = segment.end
 
         lines = split_text_by_chars(text, max_chars)
@@ -316,13 +381,18 @@ def transcribe_and_build_srt(
 
     remaining = int(total_duration) - int(last_pos)
     if remaining > 0:
-        progress_bar.update(remaining)
-    progress_bar.close()
+        if progress_bar:
+            progress_bar.update(remaining)
+        if progress_callback:
+            progress_callback(total_duration, total_duration)
+
+    if progress_bar:
+        progress_bar.close()
 
     return "\n".join(srt_lines)
 
 
-def process_file(input_path: Path, model, model_name: str, max_chars: int) -> bool:
+def process_file(input_path: Path, model, model_name: str, max_chars: int, progress_callback=None) -> bool:
     """Process a single audio/video file. Returns True on success."""
     ext = input_path.suffix.lower()
 
@@ -344,6 +414,7 @@ def process_file(input_path: Path, model, model_name: str, max_chars: int) -> bo
             model=model,
             model_name=model_name,
             max_chars=max_chars,
+            progress_callback=progress_callback,
         )
     finally:
         if temp_audio and os.path.exists(temp_audio):
