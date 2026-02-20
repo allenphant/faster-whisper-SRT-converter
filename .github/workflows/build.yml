@@ -10,8 +10,9 @@ jobs:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false # 即使一個系統失敗，另一個系統也會繼續執行
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-13] # 使用 macos-13 (Intel) 系統，相容性較好且較穩定
 
     steps:
       - name: Checkout code
